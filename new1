@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>열섬현상과 전력수요의 관계 분석</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        :root {
+            --primary-blue: #2b6cb0;
+            --secondary-orange: #dd6b20;
+            --bg-gray: #f7fafc;
+            --text-dark: #2d3748;
+            --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, system-ui, sans-serif; }
+        body { background-color: var(--bg-gray); color: var(--text-dark); padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { background: linear-gradient(135deg, var(--primary-blue), #1a365d); color: white; padding: 40px 20px; border-radius: 16px; margin-bottom: 24px; text-align: center; box-shadow: var(--card-shadow); }
+        header h1 { font-size: 2rem; margin-bottom: 12px; }
+        header p { font-size: 1.1rem; color: #feebc8; font-weight: 500; }
+        .card { background: white; padding: 24px; border-radius: 16px; margin-bottom: 24px; box-shadow: var(--card-shadow); }
+        .card h2 { font-size: 1.3rem; color: var(--primary-blue); margin-bottom: 16px; border-left: 5px solid var(--secondary-orange); padding-left: 10px; }
+        .filter-group { display: flex; gap: 15px; flex-wrap: wrap; margin-top: 15px; }
+        .filter-item { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 0.85rem; font-weight: bold; color: #4a5568; }
+        select { padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 8px; min-width: 150px; background: white; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 24px; }
+        @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } header h1 { font-size: 1.5rem; } }
+        .chart-container { position: relative; width: 100%; height: 350px; }
+        .stats-box { background: #ebf8ff; border: 1px solid #bee3f8; padding: 15px; border-radius: 12px; margin-bottom: 15px; display: inline-block; }
+        .stats-box span { font-size: 1.2rem; font-weight: bold; color: var(--primary-blue); }
+        .alert-info { background-color: #fffaf0; border-left: 4px solid var(--secondary-orange); padding: 12px; margin-top: 15px; border-radius: 4px; font-size: 0.9rem; color: #7b341e; }
+        #error-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; justify-content: center; align-items: center; }
+        .error-modal { background: white; padding: 30px; border-radius: 16px; max-width: 500px; width: 90%; }
+        .error-modal h3 { color: #e53e3e; margin-bottom: 12px; }
+        .error-modal ol { margin-left: 20px; margin-top: 10px; }
+        .error-modal li { margin-bottom: 8px; font-size: 0.95rem; }
+        #loading { text-align: center; padding: 40px; font-size: 1.2rem; font-weight: bold; color: var(--primary-blue); }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>열섬현상과 전력수요의 관계</h1>
+        <p>❓ 탐구 질문: 열섬 강도가 커질수록 전력수요도 증가할까?</p>
+    </header>
+
+    <div id="loading">📊 데이터를 불러오고 분석하는 중입니다...</div>
+
+    <div id="main-content" style="display: none;">
+        <div class="card">
+            <h2>📊 데이터 개요 및 조건 필터</h2>
+            <p>본 분석은 2025년 1년 동안의 시간별 데이터를 기반으로 합니다. 도심(서울_기온.csv)과 교외(양평_기온.csv)의 기온 격차를 추적하고, 동 시간대의 수도권 전력수요(전력수요.csv)를 결합하여 분석을 수행합니다.</p>
+            <div class="filter-group">
+                <div class="filter-item">
+                    <label for="month-filter">📅 분석 월 선택</label>
+                    <select id="month-filter" onchange="updateCharts()">
+                        <option value="all">연간 전체 (1월~12월)</option>
+                    </select>
+                </div>
+                <div class="filter-item">
+                    <label for="hour-filter">⏰ 분석 시각 선택</label>
+                    <select id="hour-filter" onchange="updateCharts()">
+                        <option value="all">전체 시간 (0시~23시)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <h2>🏙️ 열섬현상 분석</h2>
+                <p style="margin-bottom: 10px; font-size: 0.9rem; color: #4a5568;">* 열섬 강도 = 서울 기온 - 양평 기온 (°C)</p>
+                <div class="chart-container"><canvas id="tempChart"></canvas></div>
+            </div>
+            <div class="card">
+                <h2>⚡ 전력수요 분석</h2>
+                <p style="margin-bottom: 10px; font-size: 0.9rem; color: #4a5568;">선택한 조건 하에서의 시간 흐름에 따른 전력수요 변화 추이입니다.</p>
+                <div class="chart-container"><canvas id="powerChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📈 열섬 강도와 전력수요의 상관관계 분석</h2>
+            <div class="stats-box">
+                피어슨 상관계수 (r): <span id="corr-value">0.00</span> &nbsp;|&nbsp; 
+                결과 해석: <span id="corr-interpret" style="color: var(--secondary-orange);">분석 중</span>
+            </div>
+            <div class="chart-container" style="height: 400px;"><canvas id="scatterChart"></canvas></div>
+            <div class="alert-info">
+                ⚠️ **유의사항:** 상관관계가 통계적으로 증명되더라도 이것이 반드시 직접적인 인과관계를 의미하는 것은 아닙니다. 기온 외에도 다양한 사회경제적 변수가 복합적으로 작용할 수 있습니다.
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📝 탐구 결과 요약</h2>
+            <div id="result-text" style="font-size: 1.05rem; white-space: pre-line;">데이터를 로드하는 중입니다...</div>
+        </div>
+    </div>
+</div>
+
+<div id="error-overlay">
+    <div class="error-modal">
+        <h3>❌ CSV 데이터를 불러오지 못했습니다.</h3>
+        <p>원인 및 해결 방법은 다음과 같습니다:</p>
+        <ol>
+            <li><strong>GitHub Pages 배포 시:</strong> <code>서울_기온.csv</code>, <code>양평_기온.csv</code>, <code>전력수요.csv</code> 파일명이 정확하며 <code>index.html</code>과 <strong>같은 폴더</strong>에 커밋되어 있는지 확인해 주세요.</li>
+            <li><strong>로컬 PC에서 파일 직접 실행 시:</strong> 브라우저 보안 정책(CORS)으로 인해 로컬 파일 직접 로드가 차단됩니다. VS Code의 <strong>Live Server</strong> 확장 프로그램을 사용하거나 로컬 웹 서버를 구동하여 열어야 정상 작동합니다.</li>
+        </ol>
+    </div>
+</div>
+
+<script>
+    let rawData = [];
+    let tempChart, powerChart, scatterChart;
+
+    async function init() {
+        try {
+            const [seoulRes, yangRes, powerRes] = await Promise.all([
+                fetch('서울_기온.csv'), fetch('양평_기온.csv'), fetch('전력수요.csv')
+            ]);
+            if (!seoulRes.ok || !yangRes.ok || !powerRes.ok) throw new Error("File not found");
+
+            const seoulText = await seoulRes.text();
+            const yangText = await yangRes.text();
+            const powerText = await powerRes.text();
+
+            const seoulParsed = Papa.parse(seoulText.trim(), { header: true }).data;
+            const yangParsed = Papa.parse(yangText.trim(), { header: true }).data;
+            const powerParsed = Papa.parse(powerText.trim(), { header: true }).data;
+
+            const yangMap = new Map(yangParsed.map(item => [item['일시'], parseFloat(item['기온(°C)'])]));
+            const powerMap = new Map(powerParsed.map(item => [item['일시'], parseFloat(item['전력수요(MWh)'])]));
+
+            seoulParsed.forEach(s => {
+                const timeStr = s['일시'];
+                if (timeStr && yangMap.has(timeStr) && powerMap.has(timeStr)) {
+                    const seoulTemp = parseFloat(s['기온(°C)']);
+                    const yangTemp = yangMap.get(timeStr);
+                    const powerDemand = powerMap.get(timeStr);
+                    
+                    if (!isNaN(seoulTemp) && !isNaN(yangTemp) && !isNaN(powerDemand)) {
+                        const dateObj = new Date(timeStr);
+                        rawData.push({
+                            dateStr: timeStr,
+                            month: dateObj.getMonth() + 1,
+                            hour: dateObj.getHours(),
+                            seoulTemp: seoulTemp,
+                            yangTemp: yangTemp,
+                            uhi: seoulTemp - yangTemp,
+                            power: powerDemand
+                        });
+                    }
+                }
+            });
+
+            if (rawData.length === 0) throw new Error("Data empty after merge");
+
+            const mFilter = document.getElementById('month-filter');
+            const hFilter = document.getElementById('hour-filter');
+            for(let i=1; i<=12; i++) mFilter.innerHTML += `<option value="${i}">${i}월</option>`;
+            for(let i=0; i<=23; i++) hFilter.innerHTML += `<option value="${i}">${i}시</option>`;
+
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('main-content').style.display = 'block';
+            buildCharts();
+        } catch (error) {
+            console.error(error);
+            document.getElementById('error-overlay').style.display = 'flex';
+        }
+    }
+
+    function getFilteredData() {
+        const mVal = document.getElementById('month-filter').value;
+        const hVal = document.getElementById('hour-filter').value;
+        return rawData.filter(d => {
+            return (mVal === 'all' || d.month === parseInt(mVal)) && (hVal === 'all' || d.hour === parseInt(hVal));
+        });
+    }
+
+    function calculatePearson(data) {
+        const n = data.length;
+        if (n === 0) return 0;
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+        for (let i = 0; i < n; i++) {
+            const x = data[i].uhi; const y = data[i].power;
+            sumX += x; sumY += y; sumXY += (x * y); sumX2 += (x * x); sumY2 += (y * y);
+        }
+        const num = (n * sumXY) - (sumX * sumY);
+        const den = Math.sqrt(((n * sumX2) - (sumX * sumX)) * ((n * sumY2) - (sumY * sumY)));
+        return den === 0 ? 0 : num / den;
+    }
+
+    function getTrendLine(data) {
+        const n = data.length;
+        if (n === 0) return [];
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        for(let i=0; i<n; i++){
+            sumX += data[i].uhi; sumY += data[i].power; sumXY += (data[i].uhi * data[i].power); sumX2 += (data[i].uhi * data[i].uhi);
+        }
+        const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const intercept = (sumY - slope * sumX) / n;
+        const xValues = data.map(d => d.uhi);
+        const minX = Math.min(...xValues); const maxX = Math.max(...xValues);
+        return [{ x: minX, y: slope * minX + intercept }, { x: maxX, y: slope * maxX + intercept }];
+    }
+
+    function buildCharts() {
+        const data = getFilteredData();
+        const labels = data.map(d => d.dateStr);
+
+        const ctxTemp = document.getElementById('tempChart').getContext('2d');
+        tempChart = new Chart(ctxTemp, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: '도심 기온 (서울)', data: data.map(d => d.seoulTemp), borderColor: '#e53e3e', borderWidth: 1, pointRadius: 0, fill: false },
+                    { label: '교외 기온 (양평)', data: data.map(d => d.yangTemp), borderColor: '#2b6cb0', borderWidth: 1, pointRadius: 0, fill: false },
+                    { label: '열섬 강도', data: data.map(d => d.uhi), borderColor: '#dd6b20', borderWidth: 1, pointRadius: 0, fill: false }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: '기온 및 열섬 강도 추이' } }, scales: { x: { ticks: { maxTicksLimit: 10 } }, y: { title: { display: true, text: '기온 (°C)' } } } }
+        });
+
+        const ctxPower = document.getElementById('powerChart').getContext('2d');
+        powerChart = new Chart(ctxPower, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{ label: '전력수요(MWh)', data: data.map(d => d.power), borderColor: '#319795', borderWidth: 1, pointRadius: 0, fill: false }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: '전력수요 시간별 변화량' } }, scales: { x: { ticks: { maxTicksLimit: 10 } }, y: { title: { display: true, text: '전력량 (MWh)' } } } }
+        });
+
+        const ctxScatter = document.getElementById('scatterChart').getContext('2d');
+        scatterChart = new Chart(ctxScatter, {
+            data: {
+                datasets: [
+                    { type: 'scatter', label: '실제 관측치', data: data.map(d => ({ x: d.uhi, y: d.power })), backgroundColor: 'rgba(43, 108, 176, 0.4)', pointRadius: 3 },
+                    { type: 'line', label: '선형 추세선', data: getTrendLine(data), borderColor: '#dd6b20', borderWidth: 3, pointRadius: 0, fill: false }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: '열섬 강도 vs 전력수요 분산도' } }, scales: { x: { type: 'linear', position: 'bottom', title: { display: true, text: '열섬 강도 (도심 기온 - 교외 기온, °C)' } }, y: { title: { display: true, text: '전력수요 (MWh)' } } } }
+        });
+
+        updateStatisticalOutput(data);
+    }
+
+    function updateCharts() {
+        const data = getFilteredData();
+        const labels = data.map(d => d.dateStr);
+
+        tempChart.data.labels = labels;
+        tempChart.data.datasets[0].data = data.map(d => d.seoulTemp);
+        tempChart.data.datasets[1].data = data.map(d => d.yangTemp);
+        tempChart.data.datasets[2].data = data.map(d => d.uhi);
+        tempChart.update();
+
+        powerChart.data.labels = labels;
+        powerChart.data.datasets[0].data = data.map(d => d.power);
+        powerChart.update();
+
+        scatterChart.data.datasets[0].data = data.map(d => ({ x: d.uhi, y: d.power }));
+        scatterChart.data.datasets[1].data = getTrendLine(data);
+        scatterChart.update();
+
+        updateStatisticalOutput(data);
+    }
+
+    function updateStatisticalOutput(data) {
+        const r = calculatePearson(data);
+        document.getElementById('corr-value').innerText = r.toFixed(3);
+
+        let interpretation = '';
+        const absR = Math.abs(r);
+        if (absR >= 0.7) interpretation = r > 0 ? "강한 양의 상관관계" : "강한 음의 상관관계";
+        else if (absR >= 0.4) interpretation = r > 0 ? "뚜렷한 양의 상관관계" : "뚜렷한 음의 상관관계";
+        else if (absR >= 0.1) interpretation = r > 0 ? "약한 양의 상관관계" : "약한 음의 상관관계";
+        else interpretation = "상관관계가 거의 없음 (변수 간 독립성 우세)";
+        
+        document.getElementById('corr-interpret').innerText = interpretation;
+
+        if (data.length === 0) {
+            document.getElementById('result-text').innerText = "선택한 조건의 데이터가 존재하지 않아 결론을 도출할 수 없습니다.";
+            return;
+        }
+
+        const avgUhi = (data.reduce((acc, c) => acc + c.uhi, 0) / data.length).toFixed(2);
+        const maxUhi = Math.max(...data.map(d => d.uhi)).toFixed(2);
+
+        document.getElementById('result-text').innerText = `1. 분석된 데이터셋 범위 내에서 서울과 양평의 평균 기온 격차(평균 열섬 강도)는 **${avgUhi}°C**로 확인되었으며, 특정 시점의 최대 열섬 격차는 **${maxUhi}°C**까지 벌어졌습니다.
+        2. 해당 표본 데이터의 피어슨 상관계수(r)는 **${r.toFixed(3)}**를 기록하며 통계학적으로 **'${interpretation}'**의 양상을 지니는 것으로 연산되었습니다.
+        3. 따라서 '열섬 강도가 커질수록 전력수요도 변동하는가?'라는 탐구 질문에 대해, 본 데이터셋은 열섬 강도 지표와 전체 전력 소비 부하 사이에 일정 수준의 현상이 실존함을 통계적으로 지지하고 있습니다.`;
+    }
+
+    window.onload = init;
+</script>
+</body>
+</html>
